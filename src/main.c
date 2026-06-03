@@ -46,6 +46,23 @@ int main(int argc, char *argv[]) {
     cJSON_AddStringToObject(msg, "content", prompt);
     cJSON_AddItemToArray(messages, msg);
 
+    cJSON *tools = cJSON_CreateArray();
+    cJSON *Read_Tool = cJSON_CreateObject();
+    cJSON_AddStringToObject(Read_Tool, "type", "function");
+    cJSON *Read_Function = cJSON_CreateObject();
+    cJSON_AddStringToObject(Read_Function, "name", "Read");
+    cJSON_AddStringToObject(Read_Function, "description", "Read and return the contents of a file");
+
+    cJSON *Read_Parameters = cJSON_CreateObject();
+    cJSON_AddStringToObject(Read_Parameters, "type", "object");
+    cJSON *Read_Properties = cJSON_CreateObject();
+    cJSON_AddStringToObject(Read_Properties, "path", "");
+    cJSON_AddItemToObject(Read_Function, "parameters", Read_Parameters);
+
+    cJSON_AddItemToObject(Read_Tool, "function", Read_Function);
+    cJSON_AddItemToArray(tools, Read_Tool);
+    cJSON_AddItemToObject(req, "tools", tools);
+
     char *body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
 
@@ -103,7 +120,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Logs from your program will appear here!\n");
 
     // TODO: Uncomment the line below to pass the first stage
-    // printf("%s", cJSON_GetStringValue(content));
+    printf("%s", cJSON_GetStringValue(content));
 
     cJSON_Delete(json);
     return 0;
