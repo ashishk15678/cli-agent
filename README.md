@@ -1,5 +1,6 @@
 This is a project I built with codecrafters (https://app.codecrafters.io/) with their Build-your-own-claude-code challenge , but there are many extensions to it now in this project . Only tested with GROQ provider , so please open an issue if you encounter any problems with other providers.
 
+Version 0.1.0
 # Claude Code C - AI-Agnostic Coding Assistant
 
 [![progress-banner](https://backend.codecrafters.io/progress/claude-code/377cd9e8-269e-4897-9029-2cdfe18852d6)](https://app.codecrafters.io/users/ashishk15678?r=2qF)
