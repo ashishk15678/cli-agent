@@ -7,7 +7,7 @@ endif()
 
 project(codecrafters-claude-code LANGUAGES C)
 
-file(GLOB_RECURSE SOURCE_FILES src/*.c src/*.h)
+file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS src/*.c)
 
 set(CMAKE_C_STANDARD 23) # Enable the C23 standard
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -17,5 +17,6 @@ find_package(CURL REQUIRED)
 find_package(cJSON CONFIG REQUIRED)
 
 add_executable(claude-code ${SOURCE_FILES})
+target_include_directories(claude-code PRIVATE src)
 target_compile_definitions(claude-code PRIVATE _GNU_SOURCE)
 target_link_libraries(claude-code PRIVATE CURL::libcurl cjson)
