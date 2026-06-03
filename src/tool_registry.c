@@ -1,11 +1,14 @@
 #include "tool_registry.h"
+#include "utils.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -14,161 +17,11 @@ struct tool_handler {
     int (*handler)(const cJSON *arguments, char **output_out);
 };
 
-struct string_buf {
-    char *data;
-    size_t size;
-};
-
 static const char *get_json_string(const cJSON *obj, const char *key) {
     if (!cJSON_IsObject((cJSON *)obj)) return NULL;
-
     cJSON *item = cJSON_GetObjectItemCaseSensitive((cJSON *)obj, key);
     if (!cJSON_IsString(item) || item->valuestring == NULL) return NULL;
     return item->valuestring;
-}
-
-static char *duplicate_string(const char *text) {
-    if (!text) text = "";
-
-    size_t len = strlen(text);
-    char *copy = malloc(len + 1);
-    if (!copy) return NULL;
-
-    memcpy(copy, text, len + 1);
-    return copy;
-}
-
-static int set_output_string(char **output_out, const char *text) {
-    if (!output_out) return 0;
-
-    char *copy = duplicate_string(text);
-    if (!copy) {
-        fprintf(stderr, "failed to allocate tool output\n");
-        return 1;
-    }
-
-    *output_out = copy;
-    return 0;
-}
-
-static int string_buf_append(struct string_buf *buf, const char *data, size_t size) {
-    char *tmp = realloc(buf->data, buf->size + size + 1);
-    if (!tmp) return 1;
-
-    buf->data = tmp;
-    memcpy(buf->data + buf->size, data, size);
-    buf->size += size;
-    buf->data[buf->size] = '\0';
-    return 0;
-}
-
-static int ensure_parent_directories(const char *path) {
-    if (!path || !*path) return 1;
-
-    size_t len = strlen(path);
-    char *mutable_path = malloc(len + 1);
-    if (!mutable_path) {
-        fprintf(stderr, "failed to allocate path buffer\n");
-        return 1;
-    }
-
-    memcpy(mutable_path, path, len + 1);
-
-    for (char *cursor = mutable_path + 1; *cursor; ++cursor) {
-        if (*cursor != '/') continue;
-
-        *cursor = '\0';
-        if (mutable_path[0] != '\0') {
-            if (mkdir(mutable_path, 0777) != 0 && errno != EEXIST) {
-                fprintf(stderr, "failed to create directory %s: %s\n", mutable_path, strerror(errno));
-                free(mutable_path);
-                return 1;
-            }
-        }
-        *cursor = '/';
-    }
-
-    free(mutable_path);
-    return 0;
-}
-
-static char *read_entire_file(const char *path, size_t *out_size) {
-    FILE *file = fopen(path, "rb");
-    if (!file) {
-        fprintf(stderr, "failed to open %s: %s\n", path, strerror(errno));
-        return NULL;
-    }
-
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fprintf(stderr, "failed to seek %s: %s\n", path, strerror(errno));
-        fclose(file);
-        return NULL;
-    }
-
-    long len = ftell(file);
-    if (len < 0) {
-        fprintf(stderr, "failed to determine size of %s: %s\n", path, strerror(errno));
-        fclose(file);
-        return NULL;
-    }
-
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        fprintf(stderr, "failed to rewind %s: %s\n", path, strerror(errno));
-        fclose(file);
-        return NULL;
-    }
-
-    char *data = malloc((size_t)len + 1);
-    if (!data) {
-        fprintf(stderr, "failed to allocate %ld bytes\n", len + 1);
-        fclose(file);
-        return NULL;
-    }
-
-    size_t read_len = fread(data, 1, (size_t)len, file);
-    if (read_len != (size_t)len) {
-        if (ferror(file)) {
-            fprintf(stderr, "failed to read %s: %s\n", path, strerror(errno));
-        } else {
-            fprintf(stderr, "unexpected end of file while reading %s\n", path);
-        }
-        free(data);
-        fclose(file);
-        return NULL;
-    }
-
-    data[read_len] = '\0';
-    fclose(file);
-
-    if (out_size) {
-        *out_size = read_len;
-    }
-
-    return data;
-}
-
-static int write_entire_file(const char *path, const char *content) {
-    if (ensure_parent_directories(path) != 0) return 1;
-
-    FILE *file = fopen(path, "wb");
-    if (!file) {
-        fprintf(stderr, "failed to open %s for writing: %s\n", path, strerror(errno));
-        return 1;
-    }
-
-    size_t len = content ? strlen(content) : 0;
-    if (len > 0 && fwrite(content, 1, len, file) != len) {
-        fprintf(stderr, "failed to write %s: %s\n", path, strerror(errno));
-        fclose(file);
-        return 1;
-    }
-
-    if (fclose(file) != 0) {
-        fprintf(stderr, "failed to close %s: %s\n", path, strerror(errno));
-        return 1;
-    }
-
-    return 0;
 }
 
 static char *run_bash_command(const char *command) {
@@ -244,7 +97,11 @@ static int read_tool_handler(const cJSON *arguments, char **output_out) {
     }
 
     char *contents = read_entire_file(file_path, NULL);
-    if (!contents) return 1;
+    if (!contents) {
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg), "Error: Failed to read file '%s': %s", file_path, strerror(errno));
+        return set_output_string(output_out, err_msg);
+    }
 
     if (output_out) {
         *output_out = contents;
@@ -271,11 +128,69 @@ static int write_tool_handler(const cJSON *arguments, char **output_out) {
     }
 
     if (write_entire_file(file_path, content) != 0) {
-        return 1;
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg), "Error: Failed to write file '%s': %s", file_path, strerror(errno));
+        return set_output_string(output_out, err_msg);
     }
 
     char confirmation[1024];
-    snprintf(confirmation, sizeof(confirmation), "Wrote %s", file_path);
+    snprintf(confirmation, sizeof(confirmation), "Successfully wrote %s", file_path);
+    return set_output_string(output_out, confirmation);
+}
+
+static int create_file_tool_handler(const cJSON *arguments, char **output_out) {
+    const char *file_path = get_json_string(arguments, "file_path");
+    if (!file_path) file_path = get_json_string(arguments, "path");
+    if (!file_path) {
+        fprintf(stderr, "CreateFile tool call is missing file_path\n");
+        return 1;
+    }
+
+    // Ensure parent directories exist
+    ensure_parent_directories(file_path);
+
+    // Open file for writing and close it to touch/create it
+    FILE *file = fopen(file_path, "wb");
+    if (!file) {
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg), "Error: Failed to create file '%s': %s", file_path, strerror(errno));
+        return set_output_string(output_out, err_msg);
+    }
+    fclose(file);
+
+    char confirmation[1024];
+    snprintf(confirmation, sizeof(confirmation), "Successfully created empty file '%s'", file_path);
+    return set_output_string(output_out, confirmation);
+}
+
+static int create_directory_tool_handler(const cJSON *arguments, char **output_out) {
+    const char *dir_path = get_json_string(arguments, "directory_path");
+    if (!dir_path) dir_path = get_json_string(arguments, "path");
+    if (!dir_path) {
+        fprintf(stderr, "CreateDirectory tool call is missing directory_path\n");
+        return 1;
+    }
+
+    // Append trailing slash to ensure ensure_parent_directories creates the full directory path
+    size_t len = strlen(dir_path);
+    char *path_with_slash = malloc(len + 2);
+    if (!path_with_slash) return 1;
+    strcpy(path_with_slash, dir_path);
+    if (len > 0 && path_with_slash[len - 1] != '/') {
+        path_with_slash[len] = '/';
+        path_with_slash[len + 1] = '\0';
+    }
+
+    if (ensure_parent_directories(path_with_slash) != 0) {
+        free(path_with_slash);
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg), "Error: Failed to create directory '%s'", dir_path);
+        return set_output_string(output_out, err_msg);
+    }
+    free(path_with_slash);
+
+    char confirmation[1024];
+    snprintf(confirmation, sizeof(confirmation), "Successfully created directory '%s'", dir_path);
     return set_output_string(output_out, confirmation);
 }
 
@@ -290,7 +205,11 @@ static int bash_tool_handler(const cJSON *arguments, char **output_out) {
     }
 
     char *output = run_bash_command(command);
-    if (!output) return 1;
+    if (!output) {
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg), "Error: Failed to execute bash command: %s", strerror(errno));
+        return set_output_string(output_out, err_msg);
+    }
 
     if (output_out) {
         *output_out = output;
@@ -299,6 +218,180 @@ static int bash_tool_handler(const cJSON *arguments, char **output_out) {
 
     free(output);
     return 0;
+}
+
+static int list_directory_tool_handler(const cJSON *arguments, char **output_out) {
+    const char *path = get_json_string(arguments, "path");
+    if (!path) path = ".";
+
+    DIR *dir = opendir(path);
+    if (!dir) {
+        char err_msg[512];
+        snprintf(err_msg, sizeof(err_msg), "Error: Failed to open directory '%s': %s", path, strerror(errno));
+        return set_output_string(output_out, err_msg);
+    }
+
+    struct string_buf buf = {NULL, 0};
+    string_buf_append(&buf, "Directory listing for '", 23);
+    string_buf_append(&buf, path, strlen(path));
+    string_buf_append(&buf, "':\n", 3);
+
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+        const char *type = "UNKNOWN";
+        if (entry->d_type == DT_DIR) type = "DIR";
+        else if (entry->d_type == DT_REG) type = "FILE";
+        else if (entry->d_type == DT_LNK) type = "LINK";
+
+        char entry_line[1024];
+        snprintf(entry_line, sizeof(entry_line), "  [%s] %s\n", type, entry->d_name);
+        string_buf_append(&buf, entry_line, strlen(entry_line));
+    }
+    closedir(dir);
+
+    if (!buf.data) {
+        return set_output_string(output_out, "(empty directory)");
+    }
+
+    int res = set_output_string(output_out, buf.data);
+    free(buf.data);
+    return res;
+}
+
+static void find_files_recursive(const char *dir_path, const char *pattern, struct string_buf *buf) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (strcmp(entry->d_name, ".git") == 0 || strcmp(entry->d_name, "build") == 0 || strcmp(entry->d_name, "node_modules") == 0) continue;
+
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
+
+        if (strstr(entry->d_name, pattern) != NULL) {
+            string_buf_append(buf, full_path, strlen(full_path));
+            string_buf_append(buf, "\n", 1);
+        }
+
+        if (entry->d_type == DT_DIR) {
+            find_files_recursive(full_path, pattern, buf);
+        }
+    }
+    closedir(dir);
+}
+
+static int find_files_tool_handler(const cJSON *arguments, char **output_out) {
+    const char *directory = get_json_string(arguments, "directory");
+    if (!directory) directory = ".";
+    const char *pattern = get_json_string(arguments, "pattern");
+    if (!pattern) {
+        return set_output_string(output_out, "Error: Missing required argument 'pattern'");
+    }
+
+    struct string_buf buf = {NULL, 0};
+    find_files_recursive(directory, pattern, &buf);
+
+    if (!buf.data || buf.size == 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "No files matching '%s' found in '%s'", pattern, directory);
+        free(buf.data);
+        return set_output_string(output_out, msg);
+    }
+
+    int res = set_output_string(output_out, buf.data);
+    free(buf.data);
+    return res;
+}
+
+static void grep_files_recursive(const char *dir_path, const char *query, struct string_buf *buf) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (strcmp(entry->d_name, ".git") == 0 || strcmp(entry->d_name, "build") == 0 || strcmp(entry->d_name, "node_modules") == 0) continue;
+
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
+
+        if (entry->d_type == DT_REG) {
+            FILE *f = fopen(full_path, "r");
+            if (f) {
+                char line[2048];
+                int line_num = 1;
+                while (fgets(line, sizeof(line), f)) {
+                    if (strstr(line, query) != NULL) {
+                        char match_info[4096];
+                        snprintf(match_info, sizeof(match_info), "%s:%d: %s", full_path, line_num, line);
+                        string_buf_append(buf, match_info, strlen(match_info));
+                    }
+                    line_num++;
+                }
+                fclose(f);
+            }
+        } else if (entry->d_type == DT_DIR) {
+            grep_files_recursive(full_path, query, buf);
+        }
+    }
+    closedir(dir);
+}
+
+static int file_search_tool_handler(const cJSON *arguments, char **output_out) {
+    const char *directory = get_json_string(arguments, "directory");
+    if (!directory) directory = ".";
+    const char *query = get_json_string(arguments, "query");
+    if (!query) {
+        return set_output_string(output_out, "Error: Missing required argument 'query'");
+    }
+
+    struct string_buf buf = {NULL, 0};
+    grep_files_recursive(directory, query, &buf);
+
+    if (!buf.data || buf.size == 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "No matches found for '%s' in '%s'", query, directory);
+        free(buf.data);
+        return set_output_string(output_out, msg);
+    }
+
+    int res = set_output_string(output_out, buf.data);
+    free(buf.data);
+    return res;
+}
+
+static int sys_info_tool_handler(const cJSON *arguments, char **output_out) {
+    (void)arguments;
+    struct utsname uts;
+    char system_details[2048];
+
+    if (uname(&uts) != 0) {
+        snprintf(uts.sysname, sizeof(uts.sysname), "Unknown");
+        snprintf(uts.release, sizeof(uts.release), "Unknown");
+        snprintf(uts.machine, sizeof(uts.machine), "Unknown");
+    }
+
+    char cwd[512];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        snprintf(cwd, sizeof(cwd), "Unknown");
+    }
+
+    const char *user = getenv("USER");
+    if (!user) user = getenv("LOGNAME");
+    if (!user) user = "Unknown";
+
+    const char *shell = getenv("SHELL");
+    if (!shell) shell = "Unknown";
+
+    snprintf(system_details, sizeof(system_details),
+             "OS: %s\nRelease: %s\nArchitecture: %s\nCwd: %s\nUser: %s\nShell: %s\n",
+             uts.sysname, uts.release, uts.machine, cwd, user, shell);
+
+    return set_output_string(output_out, system_details);
 }
 
 static cJSON *build_tool_schema(const char *name, const char *description, cJSON *parameters) {
@@ -409,23 +502,204 @@ static cJSON *build_bash_tool_schema(void) {
     return build_tool_schema("Bash", "Execute a shell command and return its output", parameters);
 }
 
-cJSON *tool_registry_build_schema(void) {
-    cJSON *tools = cJSON_CreateArray();
-    cJSON *read_tool = build_read_tool_schema();
-    cJSON *write_tool = build_write_tool_schema();
-    cJSON *bash_tool = build_bash_tool_schema();
+static cJSON *build_list_directory_tool_schema(void) {
+    cJSON *parameters = cJSON_CreateObject();
+    cJSON *properties = cJSON_CreateObject();
+    cJSON *path = cJSON_CreateObject();
 
-    if (!tools || !read_tool || !write_tool || !bash_tool) {
-        cJSON_Delete(tools);
-        cJSON_Delete(read_tool);
-        cJSON_Delete(write_tool);
-        cJSON_Delete(bash_tool);
+    if (!parameters || !properties || !path) {
+        cJSON_Delete(parameters);
+        cJSON_Delete(properties);
+        cJSON_Delete(path);
         return NULL;
     }
 
-    cJSON_AddItemToArray(tools, read_tool);
-    cJSON_AddItemToArray(tools, write_tool);
-    cJSON_AddItemToArray(tools, bash_tool);
+    cJSON_AddStringToObject(parameters, "type", "object");
+    cJSON_AddItemToObject(parameters, "properties", properties);
+    cJSON_AddBoolToObject(parameters, "additionalProperties", 0);
+
+    cJSON_AddStringToObject(path, "type", "string");
+    cJSON_AddStringToObject(path, "description", "Path to the directory to list (defaults to '.')");
+    cJSON_AddItemToObject(properties, "path", path);
+
+    return build_tool_schema("ListDirectory", "List files and folders in a directory", parameters);
+}
+
+static cJSON *build_find_files_tool_schema(void) {
+    cJSON *parameters = cJSON_CreateObject();
+    cJSON *properties = cJSON_CreateObject();
+    cJSON *required = cJSON_CreateArray();
+    cJSON *directory = cJSON_CreateObject();
+    cJSON *pattern = cJSON_CreateObject();
+
+    if (!parameters || !properties || !required || !directory || !pattern) {
+        cJSON_Delete(parameters);
+        cJSON_Delete(properties);
+        cJSON_Delete(required);
+        cJSON_Delete(directory);
+        cJSON_Delete(pattern);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(parameters, "type", "object");
+    cJSON_AddItemToObject(parameters, "properties", properties);
+    cJSON_AddItemToObject(parameters, "required", required);
+    cJSON_AddBoolToObject(parameters, "additionalProperties", 0);
+
+    cJSON_AddStringToObject(directory, "type", "string");
+    cJSON_AddStringToObject(directory, "description", "Directory path to start searching in (defaults to '.')");
+    cJSON_AddItemToObject(properties, "directory", directory);
+
+    cJSON_AddStringToObject(pattern, "type", "string");
+    cJSON_AddStringToObject(pattern, "description", "Substring or glob pattern to match against file names");
+    cJSON_AddItemToObject(properties, "pattern", pattern);
+
+    cJSON_AddItemToArray(required, cJSON_CreateString("pattern"));
+
+    return build_tool_schema("FindFiles", "Recursively find files matching a name pattern", parameters);
+}
+
+static cJSON *build_file_search_tool_schema(void) {
+    cJSON *parameters = cJSON_CreateObject();
+    cJSON *properties = cJSON_CreateObject();
+    cJSON *required = cJSON_CreateArray();
+    cJSON *directory = cJSON_CreateObject();
+    cJSON *query = cJSON_CreateObject();
+
+    if (!parameters || !properties || !required || !directory || !query) {
+        cJSON_Delete(parameters);
+        cJSON_Delete(properties);
+        cJSON_Delete(required);
+        cJSON_Delete(directory);
+        cJSON_Delete(query);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(parameters, "type", "object");
+    cJSON_AddItemToObject(parameters, "properties", properties);
+    cJSON_AddItemToObject(parameters, "required", required);
+    cJSON_AddBoolToObject(parameters, "additionalProperties", 0);
+
+    cJSON_AddStringToObject(directory, "type", "string");
+    cJSON_AddStringToObject(directory, "description", "Directory path to search in (defaults to '.')");
+    cJSON_AddItemToObject(properties, "directory", directory);
+
+    cJSON_AddStringToObject(query, "type", "string");
+    cJSON_AddStringToObject(query, "description", "Text pattern or substring to search for inside files");
+    cJSON_AddItemToObject(properties, "query", query);
+
+    cJSON_AddItemToArray(required, cJSON_CreateString("query"));
+
+    return build_tool_schema("FileSearch", "Recursively search for text patterns inside files (like grep)", parameters);
+}
+
+static cJSON *build_sys_info_tool_schema(void) {
+    cJSON *parameters = cJSON_CreateObject();
+    cJSON *properties = cJSON_CreateObject();
+    if (!parameters || !properties) {
+        cJSON_Delete(parameters);
+        cJSON_Delete(properties);
+        return NULL;
+    }
+    cJSON_AddStringToObject(parameters, "type", "object");
+    cJSON_AddItemToObject(parameters, "properties", properties);
+    cJSON_AddBoolToObject(parameters, "additionalProperties", 0);
+
+    return build_tool_schema("SysInfo", "Get current system details (OS, directory, user, shell)", parameters);
+}
+
+static cJSON *build_create_file_tool_schema(void) {
+    cJSON *parameters = cJSON_CreateObject();
+    cJSON *properties = cJSON_CreateObject();
+    cJSON *required = cJSON_CreateArray();
+    cJSON *file_path = cJSON_CreateObject();
+
+    if (!parameters || !properties || !required || !file_path) {
+        cJSON_Delete(parameters);
+        cJSON_Delete(properties);
+        cJSON_Delete(required);
+        cJSON_Delete(file_path);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(parameters, "type", "object");
+    cJSON_AddItemToObject(parameters, "properties", properties);
+    cJSON_AddItemToObject(parameters, "required", required);
+    cJSON_AddBoolToObject(parameters, "additionalProperties", 0);
+
+    cJSON_AddStringToObject(file_path, "type", "string");
+    cJSON_AddStringToObject(file_path, "description", "Path to the file to create");
+    cJSON_AddItemToObject(properties, "file_path", file_path);
+    cJSON_AddItemToArray(required, cJSON_CreateString("file_path"));
+
+    return build_tool_schema("CreateFile", "Create a new empty file at the specified path", parameters);
+}
+
+static cJSON *build_create_directory_tool_schema(void) {
+    cJSON *parameters = cJSON_CreateObject();
+    cJSON *properties = cJSON_CreateObject();
+    cJSON *required = cJSON_CreateArray();
+    cJSON *directory_path = cJSON_CreateObject();
+
+    if (!parameters || !properties || !required || !directory_path) {
+        cJSON_Delete(parameters);
+        cJSON_Delete(properties);
+        cJSON_Delete(required);
+        cJSON_Delete(directory_path);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(parameters, "type", "object");
+    cJSON_AddItemToObject(parameters, "properties", properties);
+    cJSON_AddItemToObject(parameters, "required", required);
+    cJSON_AddBoolToObject(parameters, "additionalProperties", 0);
+
+    cJSON_AddStringToObject(directory_path, "type", "string");
+    cJSON_AddStringToObject(directory_path, "description", "Path to the directory to create");
+    cJSON_AddItemToObject(properties, "directory_path", directory_path);
+    cJSON_AddItemToArray(required, cJSON_CreateString("directory_path"));
+
+    return build_tool_schema("CreateDirectory", "Create a new directory (and intermediate folders) at the specified path", parameters);
+}
+
+cJSON *tool_registry_build_schema(void) {
+    cJSON *tools = cJSON_CreateArray();
+    if (!tools) return NULL;
+
+    cJSON *t1 = build_read_tool_schema();
+    cJSON *t2 = build_write_tool_schema();
+    cJSON *t3 = build_bash_tool_schema();
+    cJSON *t4 = build_list_directory_tool_schema();
+    cJSON *t5 = build_find_files_tool_schema();
+    cJSON *t6 = build_file_search_tool_schema();
+    cJSON *t7 = build_sys_info_tool_schema();
+    cJSON *t8 = build_create_file_tool_schema();
+    cJSON *t9 = build_create_directory_tool_schema();
+
+    if (!t1 || !t2 || !t3 || !t4 || !t5 || !t6 || !t7 || !t8 || !t9) {
+        cJSON_Delete(tools);
+        cJSON_Delete(t1);
+        cJSON_Delete(t2);
+        cJSON_Delete(t3);
+        cJSON_Delete(t4);
+        cJSON_Delete(t5);
+        cJSON_Delete(t6);
+        cJSON_Delete(t7);
+        cJSON_Delete(t8);
+        cJSON_Delete(t9);
+        return NULL;
+    }
+
+    cJSON_AddItemToArray(tools, t1);
+    cJSON_AddItemToArray(tools, t2);
+    cJSON_AddItemToArray(tools, t3);
+    cJSON_AddItemToArray(tools, t4);
+    cJSON_AddItemToArray(tools, t5);
+    cJSON_AddItemToArray(tools, t6);
+    cJSON_AddItemToArray(tools, t7);
+    cJSON_AddItemToArray(tools, t8);
+    cJSON_AddItemToArray(tools, t9);
+
     return tools;
 }
 
@@ -434,6 +708,12 @@ int tool_registry_execute(const cJSON *tool_call, char **output_out) {
         {"Read", read_tool_handler},
         {"Write", write_tool_handler},
         {"Bash", bash_tool_handler},
+        {"ListDirectory", list_directory_tool_handler},
+        {"FindFiles", find_files_tool_handler},
+        {"FileSearch", file_search_tool_handler},
+        {"SysInfo", sys_info_tool_handler},
+        {"CreateFile", create_file_tool_handler},
+        {"CreateDirectory", create_directory_tool_handler},
     };
 
     if (output_out) {
@@ -454,15 +734,15 @@ int tool_registry_execute(const cJSON *tool_call, char **output_out) {
         return 1;
     }
 
-    if (!arguments_str) {
-        fprintf(stderr, "tool call %s is missing arguments\n", name);
-        return 1;
-    }
-
-    cJSON *arguments = cJSON_Parse(arguments_str);
-    if (!arguments) {
-        fprintf(stderr, "failed to parse arguments for tool %s\n", name);
-        return 1;
+    cJSON *arguments = NULL;
+    if (arguments_str) {
+        arguments = cJSON_Parse(arguments_str);
+        if (!arguments) {
+            fprintf(stderr, "failed to parse arguments for tool %s\n", name);
+            return 1;
+        }
+    } else {
+        arguments = cJSON_CreateObject();
     }
 
     size_t handler_count = sizeof(handlers) / sizeof(handlers[0]);

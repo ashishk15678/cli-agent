@@ -1,37 +1,39 @@
 #include "app.h"
+#include "config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 int main(int argc, char *argv[]) {
-    const char *prompt = NULL;
-    int opt;
+    agent_config_t config;
+    config_init(&config);
 
-    while ((opt = getopt(argc, argv, "p:")) != -1) {
-        switch (opt) {
-            case 'p':
-                prompt = optarg;
-                break;
-            default:
-                fprintf(stderr, "usage: %s -p <prompt>\n", argv[0]);
+    if (config_parse_args(&config, argc, argv) != 0) {
+        config_free(&config);
+        return 1;
+    }
+
+    // Ollama does not require an API key by default
+    if (config.provider != PROVIDER_OLLAMA) {
+        if (!config.api_key || !*config.api_key) {
+            if (config.interactive && isatty(STDIN_FILENO)) {
+                printf("No configuration detected. Entering interactive setup...\n\n");
+                if (config_interactive_setup(&config) != 0) {
+                    fprintf(stderr, "Interactive configuration canceled.\n");
+                    config_free(&config);
+                    return 1;
+                }
+            } else {
+                fprintf(stderr, "error: API key is not set. Please set the appropriate environment variable (e.g. AI_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY) or provide it using -k/--api-key option.\n");
+                config_free(&config);
                 return 1;
+            }
         }
     }
 
-    if (!prompt) {
-        fprintf(stderr, "error: -p flag is required\n");
-        return 1;
-    }
+    int result = app_run(&config);
 
-    const char *api_key = getenv("OPENROUTER_API_KEY");
-    const char *base_url = getenv("OPENROUTER_BASE_URL");
-    if (!base_url || !*base_url) base_url = "https://openrouter.ai/api/v1";
-
-    if (!api_key || !*api_key) {
-        fprintf(stderr, "OPENROUTER_API_KEY is not set\n");
-        return 1;
-    }
-
-    return app_run(prompt, api_key, base_url);
+    config_free(&config);
+    return result;
 }
