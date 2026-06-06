@@ -4,7 +4,6 @@
 #include "utils.h"
 #include "dropdown.h"
 #include "memory.h"
-#include "drift.h"
 #include "speculate.h"
 
 #include <curl/curl.h>
@@ -239,19 +238,6 @@ static int run_agent_loop(const agent_config_t *config, cJSON *messages) {
                 break;
             }
 
-            char *drift_explanation = NULL;
-            if (drift_check(config, &drift_explanation)) {
-                int drift_action = drift_handle_prompt(config, drift_explanation);
-                free(drift_explanation);
-                if (drift_action == 1) { // Revert
-                    status = 0;
-                    break;
-                } else if (drift_action == 2) { // Pause
-                    status = 0;
-                    break;
-                }
-            }
-
             continue;
         }
 
@@ -349,7 +335,6 @@ int app_run(const agent_config_t *config) {
         }
 
         memory_retrieve_and_inject(config, config->prompt, messages);
-        drift_init(config->prompt);
         status = run_agent_loop(config, messages);
         memory_auto_extract(config, messages);
     } else {
@@ -524,7 +509,6 @@ int app_run(const agent_config_t *config) {
             }
 
             memory_retrieve_and_inject(config, input, messages);
-            drift_init(input);
             status = run_agent_loop(config, messages);
             memory_auto_extract(config, messages);
             printf("\n");

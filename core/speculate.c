@@ -94,7 +94,7 @@ int speculate_run(const agent_config_t *config, int num_branches, const char **b
         return 1;
     }
 
-    printf("\n\033[1;35m🚀 Starting Multi-Branch Speculative Execution (%d branches)...\033[0m\n", num_branches);
+    printf("\n\033[1;35m🚀 Starting Multi-Branch Speculative Execution (%d branches simultaneously)...\033[0m\n", num_branches);
     
     // Clean and recreate speculative directory
     char *rm_out = exec_in_dir("rm -rf " SPEC_DIR " && mkdir -p " SPEC_DIR, NULL);
@@ -111,96 +111,124 @@ int speculate_run(const agent_config_t *config, int num_branches, const char **b
     int tests_ok[3] = {0, 0, 0};
     int scores[3] = {0, 0, 0};
 
-    // Find the relative path to the built sage executable from the branches
-    // Since the branches are at .sage/speculative/branch_X, the executable is at ../../../build/sage
     const char *sage_exec = "../../../build/sage";
 
+    // Setup all sandboxes sequentially first
     for (int i = 0; i < num_branches; i++) {
-        printf("\n\033[1;36m[Branch %d]\033[0m Setting up sandbox in '%s'...\n", i + 1, branch_dirs[i]);
-        fflush(stdout);
-
-        // Create directory
+        printf("\033[1;36m[Branch %d]\033[0m Preparing sandbox in '%s'...\n", i + 1, branch_dirs[i]);
+        
         char mkdir_cmd[256];
         snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s", branch_dirs[i]);
         free(exec_in_dir(mkdir_cmd, NULL));
 
-        // Copy directories: CMakeLists.txt, core/, include/, and any local configuration/script
         char cp_cmd[1024];
         snprintf(cp_cmd, sizeof(cp_cmd), "cp -r CMakeLists.txt core include %s/", branch_dirs[i]);
         free(exec_in_dir(cp_cmd, NULL));
 
-        // Initialize temporary git repo in sandbox to easily track changes/diffs
         free(exec_in_dir("git init && git config user.name \"sage-spec\" && git config user.email \"sage-spec@sage.ai\" && git add . && git commit -m \"initial\"", branch_dirs[i]));
+    }
 
-        // Run the Sage agent in that sandbox non-interactively
-        printf("\033[1;36m[Branch %d]\033[0m Running speculative agent session...\n", i + 1);
-        printf("Prompt: \"%s\"\n", branch_prompts[i]);
-        fflush(stdout);
+    // Build the option string based on active config
+    char prov_opt[64] = {0};
+    switch (config->provider) {
+        case PROVIDER_OPENROUTER: strcpy(prov_opt, "-r openrouter"); break;
+        case PROVIDER_OPENAI: strcpy(prov_opt, "-r openai"); break;
+        case PROVIDER_ANTHROPIC: strcpy(prov_opt, "-r anthropic"); break;
+        case PROVIDER_GEMINI: strcpy(prov_opt, "-r gemini"); break;
+        case PROVIDER_GROQ: strcpy(prov_opt, "-r groq"); break;
+        case PROVIDER_OLLAMA: strcpy(prov_opt, "-r ollama"); break;
+    }
 
-        char agent_cmd[8192];
-        // Build the option string based on active config
-        char prov_opt[64] = {0};
-        switch (config->provider) {
-            case PROVIDER_OPENROUTER: strcpy(prov_opt, "-r openrouter"); break;
-            case PROVIDER_OPENAI: strcpy(prov_opt, "-r openai"); break;
-            case PROVIDER_ANTHROPIC: strcpy(prov_opt, "-r anthropic"); break;
-            case PROVIDER_GEMINI: strcpy(prov_opt, "-r gemini"); break;
-            case PROVIDER_GROQ: strcpy(prov_opt, "-r groq"); break;
-            case PROVIDER_OLLAMA: strcpy(prov_opt, "-r ollama"); break;
-        }
+    char key_opt[1024] = {0};
+    if (config->api_key && strlen(config->api_key) > 0) {
+        snprintf(key_opt, sizeof(key_opt), "-k \"%s\"", config->api_key);
+    }
 
-        char key_opt[1024] = {0};
-        if (config->api_key && strlen(config->api_key) > 0) {
-            snprintf(key_opt, sizeof(key_opt), "-k \"%s\"", config->api_key);
-        }
+    char model_opt[256] = {0};
+    if (config->model && strlen(config->model) > 0) {
+        snprintf(model_opt, sizeof(model_opt), "-m %s", config->model);
+    }
 
-        char model_opt[256] = {0};
-        if (config->model && strlen(config->model) > 0) {
-            snprintf(model_opt, sizeof(model_opt), "-m %s", config->model);
-        }
+    char url_opt[512] = {0};
+    if (config->base_url && strlen(config->base_url) > 0) {
+        snprintf(url_opt, sizeof(url_opt), "-u %s", config->base_url);
+    }
 
-        char url_opt[512] = {0};
-        if (config->base_url && strlen(config->base_url) > 0) {
-            snprintf(url_opt, sizeof(url_opt), "-u %s", config->base_url);
-        }
+    // Spawn all agent processes in parallel
+    pid_t pids[3] = {0, 0, 0};
+    printf("\n\033[1;35m🔥 Spawning all speculative agents simultaneously...\033[0m\n");
+    fflush(stdout);
 
-        snprintf(agent_cmd, sizeof(agent_cmd), "%s -p \"%s\" %s %s %s %s",
-                 sage_exec, branch_prompts[i], prov_opt, model_opt, key_opt, url_opt);
-
-        // Run the agent process
-        char *agent_output = exec_in_dir(agent_cmd, branch_dirs[i]);
-        if (agent_output) {
-            // Uncomment to debug speculative session output
-            // printf("%s\n", agent_output);
-            free(agent_output);
-        }
-
-        // Test compilation
-        printf("\033[1;36m[Branch %d]\033[0m Verifying compilation...\n", i + 1);
-        fflush(stdout);
-        int build_status = run_in_dir_exit_status("cmake -B build -S . && cmake --build build", branch_dirs[i]);
-        if (build_status == 0) {
-            compile_ok[i] = 1;
-            printf("\033[1;32m✓ Compile succeeded\033[0m\n");
+    for (int i = 0; i < num_branches; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "Failed to fork process for Branch %d\n", i + 1);
+        } else if (pid == 0) {
+            // Child process: run the agent command redirecting output to log file
+            char agent_cmd[8192];
+            snprintf(agent_cmd, sizeof(agent_cmd), "%s -p \"%s\" %s %s %s %s &> agent.log",
+                     sage_exec, branch_prompts[i], prov_opt, model_opt, key_opt, url_opt);
+            
+            int exit_code = run_in_dir_exit_status(agent_cmd, branch_dirs[i]);
+            _exit(exit_code);
         } else {
-            printf("\033[1;31m✗ Compile failed\033[0m\n");
+            pids[i] = pid;
+            printf("\033[1;36m[Branch %d]\033[0m Started parallel agent process (PID: %d)...\n", i + 1, pid);
         }
+    }
 
-        // Test execution if test command is provided
-        if (test_command && strlen(test_command) > 0) {
-            printf("\033[1;36m[Branch %d]\033[0m Running test suite...\n", i + 1);
-            fflush(stdout);
-            int test_status = run_in_dir_exit_status(test_command, branch_dirs[i]);
-            if (test_status == 0) {
-                tests_ok[i] = 1;
-                printf("\033[1;32m✓ Tests passed\033[0m\n");
+    // Wait for all agents to complete
+    printf("Waiting for parallel agent runs to complete...\n");
+    fflush(stdout);
+    for (int i = 0; i < num_branches; i++) {
+        if (pids[i] > 0) {
+            int status = 0;
+            waitpid(pids[i], &status, 0);
+            printf("\033[1;36m[Branch %d]\033[0m Agent finished (Exit Code: %d)\n", i + 1, WEXITSTATUS(status));
+        }
+    }
+
+    // Run build and tests in parallel for all sandboxes
+    pid_t test_pids[3] = {0, 0, 0};
+    printf("\n\033[1;35m🛠️  Running builds and test suites simultaneously in parallel...\033[0m\n");
+    fflush(stdout);
+
+    for (int i = 0; i < num_branches; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "Failed to fork build process for Branch %d\n", i + 1);
+        } else if (pid == 0) {
+            // Child process: compile and test
+            char build_cmd[1024];
+            if (test_command && strlen(test_command) > 0) {
+                snprintf(build_cmd, sizeof(build_cmd), "(cmake -B build -S . && cmake --build build && %s) &> build.log", test_command);
             } else {
-                printf("\033[1;31m✗ Tests failed (exit status: %d)\033[0m\n", test_status);
+                snprintf(build_cmd, sizeof(build_cmd), "(cmake -B build -S . && cmake --build build) &> build.log");
             }
+            int exit_code = run_in_dir_exit_status(build_cmd, branch_dirs[i]);
+            _exit(exit_code);
         } else {
-            tests_ok[i] = 1; // no test command, treat as passing
+            test_pids[i] = pid;
         }
+    }
 
+    // Wait for all tests/builds to complete
+    for (int i = 0; i < num_branches; i++) {
+        if (test_pids[i] > 0) {
+            int status = 0;
+            waitpid(test_pids[i], &status, 0);
+            int exit_code = WEXITSTATUS(status);
+            if (exit_code == 0) {
+                compile_ok[i] = 1;
+                tests_ok[i] = 1;
+                printf("\033[1;36m[Branch %d]\033[0m Build & Tests: \033[1;32mPASSED\033[0m\n", i + 1);
+            } else {
+                compile_ok[i] = 0;
+                tests_ok[i] = 0;
+                printf("\033[1;36m[Branch %d]\033[0m Build & Tests: \033[1;31mFAILED\033[0m (exit status: %d)\n", i + 1, exit_code);
+            }
+        }
+        
         // Capture diff
         diffs[i] = exec_in_dir("git diff", branch_dirs[i]);
     }

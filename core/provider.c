@@ -369,12 +369,35 @@ int provider_chat_completion(const agent_config_t *config, const cJSON *request,
         cJSON *msg_item = cJSON_GetObjectItemCaseSensitive(error_obj, "message");
         cJSON *failed_gen = cJSON_GetObjectItemCaseSensitive(error_obj, "failed_generation");
         if (cJSON_IsString(failed_gen)) {
-            fprintf(stderr, "API Error: %s\nDetails (failed generation): %s\n", 
-                    cJSON_IsString(msg_item) ? msg_item->valuestring : "Unknown API error",
-                    failed_gen->valuestring);
-        } else {
-            fprintf(stderr, "API Error: %s\n", cJSON_IsString(msg_item) ? msg_item->valuestring : "Unknown API error");
+            // Intercept failed generation and mock a successful completion response
+            cJSON *mocked_resp = cJSON_CreateObject();
+            cJSON *choices = cJSON_CreateArray();
+            cJSON *choice = cJSON_CreateObject();
+            cJSON *message = cJSON_CreateObject();
+            
+            if (mocked_resp && choices && choice && message) {
+                cJSON_AddItemToObject(mocked_resp, "choices", choices);
+                cJSON_AddItemToArray(choices, choice);
+                cJSON_AddItemToObject(choice, "message", message);
+                cJSON_AddStringToObject(choice, "finish_reason", "stop");
+                cJSON_AddNumberToObject(choice, "index", 0);
+                cJSON_AddStringToObject(message, "role", "assistant");
+                cJSON_AddStringToObject(message, "content", failed_gen->valuestring);
+                
+                cJSON_Delete(parsed_resp);
+                *response_out = mocked_resp;
+                return 0;
+            } else {
+                if (mocked_resp) cJSON_Delete(mocked_resp);
+                else {
+                    if (choices) cJSON_Delete(choices);
+                    if (choice) cJSON_Delete(choice);
+                    if (message) cJSON_Delete(message);
+                }
+            }
         }
+        
+        fprintf(stderr, "API Error: %s\n", cJSON_IsString(msg_item) ? msg_item->valuestring : "Unknown API error");
         cJSON_Delete(parsed_resp);
         return 1;
     }

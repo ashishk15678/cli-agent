@@ -11,6 +11,7 @@
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <ctype.h>
 
 struct tool_handler {
     const char *name;
@@ -88,12 +89,136 @@ static char *run_bash_command(const char *command) {
     return buf.data;
 }
 
+static int str_contains_case_insensitive(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return 0;
+    size_t h_len = strlen(haystack);
+    size_t n_len = strlen(needle);
+    if (n_len > h_len) return 0;
+    for (size_t i = 0; i <= h_len - n_len; i++) {
+        size_t j;
+        for (j = 0; j < n_len; j++) {
+            if (tolower((unsigned char)haystack[i + j]) != tolower((unsigned char)needle[j])) {
+                break;
+            }
+        }
+        if (j == n_len) return 1;
+    }
+    return 0;
+}
+
+static int str_equals_case_insensitive(const char *s1, const char *s2) {
+    if (!s1 || !s2) return 0;
+    while (*s1 && *s2) {
+        if (tolower((unsigned char)*s1) != tolower((unsigned char)*s2)) {
+            return 0;
+        }
+        s1++;
+        s2++;
+    }
+    return *s1 == '\0' && *s2 == '\0';
+}
+
+static int check_permission_for_file(const char *file_path, const char *action_name) {
+    char cwd[1024];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        return 0;
+    }
+
+    char resolved_file[2048] = {0};
+    if (file_path[0] == '/') {
+        if (!realpath(file_path, resolved_file)) {
+            strncpy(resolved_file, file_path, sizeof(resolved_file) - 1);
+        }
+    } else {
+        char combined[4096];
+        snprintf(combined, sizeof(combined), "%s/%s", cwd, file_path);
+        if (!realpath(combined, resolved_file)) {
+            strncpy(resolved_file, combined, sizeof(resolved_file) - 1);
+        }
+    }
+
+    char resolved_cwd[2048];
+    if (!realpath(cwd, resolved_cwd)) {
+        strncpy(resolved_cwd, cwd, sizeof(resolved_cwd) - 1);
+    }
+
+    size_t cwd_len = strlen(resolved_cwd);
+    int is_outside = 0;
+    if (strncmp(resolved_file, resolved_cwd, cwd_len) != 0) {
+        is_outside = 1;
+    } else {
+        if (resolved_file[cwd_len] != '\0' && resolved_file[cwd_len] != '/') {
+            is_outside = 1;
+        }
+    }
+
+    int is_sensitive = 0;
+    const char *filename = strrchr(resolved_file, '/');
+    if (!filename) filename = resolved_file;
+    else filename++;
+
+    if (str_equals_case_insensitive(filename, ".env") ||
+        str_contains_case_insensitive(filename, ".env.") ||
+        str_equals_case_insensitive(filename, "config.json") ||
+        str_contains_case_insensitive(resolved_file, "/.ssh/") ||
+        str_contains_case_insensitive(resolved_file, "/etc/") ||
+        str_equals_case_insensitive(filename, "passwd") ||
+        str_contains_case_insensitive(filename, "credential")) {
+        is_sensitive = 1;
+    }
+
+    if (is_outside || is_sensitive) {
+        printf("\n\033[1;33m⚠️  [SECURITY WARNING] The agent is requesting permission to %s the file:\033[0m\n", action_name);
+        printf("Path: %s\n", resolved_file);
+        if (is_outside) printf("Reason: File is located OUTSIDE the project workspace directory.\n");
+        if (is_sensitive) printf("Reason: File contains SENSITIVE configuration/credentials.\n");
+        
+        printf("Do you grant permission? (y/N): ");
+        fflush(stdout);
+        
+        char choice[32];
+        if (fgets(choice, sizeof(choice), stdin)) {
+            char ch = choice[0];
+            if (ch == 'y' || ch == 'Y') {
+                printf("Permission granted.\n\n");
+                return 1;
+            }
+        }
+        printf("Permission denied.\n\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int check_permission_for_bash(const char *command) {
+    printf("\n\033[1;33m⚠️  [SECURITY WARNING] The agent is requesting permission to run a bash command:\033[0m\n");
+    printf("Command: %s\n", command);
+    printf("Do you grant permission? (y/N): ");
+    fflush(stdout);
+    
+    char choice[32];
+    if (fgets(choice, sizeof(choice), stdin)) {
+        char ch = choice[0];
+        if (ch == 'y' || ch == 'Y') {
+            printf("Permission granted.\n\n");
+            return 1;
+        }
+    }
+    printf("Permission denied.\n\n");
+    return 0;
+}
+
 static int read_tool_handler(const cJSON *arguments, char **output_out) {
     const char *file_path = get_json_string(arguments, "file_path");
     if (!file_path) file_path = get_json_string(arguments, "path");
     if (!file_path) {
         fprintf(stderr, "Read tool call is missing file_path\n");
         return 1;
+    }
+
+    if (!check_permission_for_file(file_path, "read")) {
+        return set_output_string(output_out, "Error: Permission denied by user.");
     }
 
     char *contents = read_entire_file(file_path, NULL);
@@ -127,6 +252,10 @@ static int write_tool_handler(const cJSON *arguments, char **output_out) {
         return 1;
     }
 
+    if (!check_permission_for_file(file_path, "write")) {
+        return set_output_string(output_out, "Error: Permission denied by user.");
+    }
+
     if (write_entire_file(file_path, content) != 0) {
         char err_msg[512];
         snprintf(err_msg, sizeof(err_msg), "Error: Failed to write file '%s': %s", file_path, strerror(errno));
@@ -144,6 +273,10 @@ static int create_file_tool_handler(const cJSON *arguments, char **output_out) {
     if (!file_path) {
         fprintf(stderr, "CreateFile tool call is missing file_path\n");
         return 1;
+    }
+
+    if (!check_permission_for_file(file_path, "create")) {
+        return set_output_string(output_out, "Error: Permission denied by user.");
     }
 
     // Ensure parent directories exist
@@ -169,6 +302,10 @@ static int create_directory_tool_handler(const cJSON *arguments, char **output_o
     if (!dir_path) {
         fprintf(stderr, "CreateDirectory tool call is missing directory_path\n");
         return 1;
+    }
+
+    if (!check_permission_for_file(dir_path, "create directory")) {
+        return set_output_string(output_out, "Error: Permission denied by user.");
     }
 
     // Append trailing slash to ensure ensure_parent_directories creates the full directory path
@@ -202,6 +339,10 @@ static int bash_tool_handler(const cJSON *arguments, char **output_out) {
     if (!command) {
         fprintf(stderr, "Bash tool call is missing command\n");
         return 1;
+    }
+
+    if (!check_permission_for_bash(command)) {
+        return set_output_string(output_out, "Error: Permission denied by user.");
     }
 
     char *output = run_bash_command(command);

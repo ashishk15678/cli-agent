@@ -54,3 +54,4 @@ dkms.conf
 build
 vcpkg_installed
 .env
+.sage/

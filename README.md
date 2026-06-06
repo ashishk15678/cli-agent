@@ -3,7 +3,6 @@ This is a project I built with codecrafters (https://app.codecrafters.io/) with 
 Version 0.1.0
 # Sage - AI-Agnostic Coding Assistant
 
-[![progress-banner](https://backend.codecrafters.io/progress/claude-code/377cd9e8-269e-4897-9029-2cdfe18852d6)](https://app.codecrafters.io/users/ashishk15678?r=2qF)
 [![Language](https://img.shields.io/badge/language-C23-blue.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#)
 [![Dependency-libcurl](https://img.shields.io/badge/dependency-libcurl-brightgreen.svg)](#)
@@ -129,3 +128,5 @@ Anthropic's Messages API specifies system prompts, tool schemas, and assistant r
 
 ### 2. Multi-turn History and Interactive Agent Loop
 The REPL is powered by a JSON messages array that grows during the session. When the LLM issues tool calls, the agent loop pauses, invokes the tool registry, displays status updates to the terminal, and posts the responses back to the LLM. The agent runs up to 20 sub-iterations dynamically before yielding to the user.
+
+[![progress-banner](https://backend.codecrafters.io/progress/claude-code/377cd9e8-269e-4897-9029-2cdfe18852d6)](https://app.codecrafters.io/users/ashishk15678?r=2qF)
