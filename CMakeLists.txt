@@ -5,7 +5,7 @@ if(DEFINED CMAKE_TOOLCHAIN_FILE AND NOT EXISTS "${CMAKE_TOOLCHAIN_FILE}")
   unset(CMAKE_TOOLCHAIN_FILE CACHE)
 endif()
 
-project(codecrafters-claude-code LANGUAGES C)
+project(sage LANGUAGES C)
 
 file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS src/*.c)
 
@@ -16,7 +16,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 find_package(CURL REQUIRED)
 find_package(cJSON CONFIG REQUIRED)
 
-add_executable(claude-code ${SOURCE_FILES})
-target_include_directories(claude-code PRIVATE src)
-target_compile_definitions(claude-code PRIVATE _GNU_SOURCE)
-target_link_libraries(claude-code PRIVATE CURL::libcurl cjson)
+add_executable(sage ${SOURCE_FILES})
+target_include_directories(sage PRIVATE src)
+target_compile_definitions(sage PRIVATE _GNU_SOURCE)
+target_link_libraries(sage PRIVATE CURL::libcurl cjson)

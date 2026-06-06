@@ -265,7 +265,7 @@ int app_run(const agent_config_t *config) {
         curl_global_cleanup();
         return 1;
     }
-    const char *default_system_prompt = 
+    const char *default_system_prompt =
         "You are Claude Code C, a command line AI programming assistant.\n"
         "You have access to a set of tools to interact with the system:\n"
         "  - Read: Read the contents of a file.\n"
@@ -290,14 +290,14 @@ int app_run(const agent_config_t *config) {
     combined_prompt = malloc(base_len);
     if (combined_prompt) {
         if (config->system_prompt && strlen(config->system_prompt) > 0) {
-            snprintf(combined_prompt, base_len, "%s\n\nUser Custom System Prompt:\n%s", 
+            snprintf(combined_prompt, base_len, "%s\n\nUser Custom System Prompt:\n%s",
                      default_system_prompt, config->system_prompt);
         } else {
             snprintf(combined_prompt, base_len, "%s", default_system_prompt);
         }
 
         if (config->provider == PROVIDER_GROQ || config->provider == PROVIDER_OLLAMA) {
-            strcat(combined_prompt, 
+            strcat(combined_prompt,
                 "\n\nIMPORTANT: You must invoke tools ONLY using the native tool-calling mechanism. "
                 "Do NOT output XML-like tags (such as <function=...> or <tools>...</tools>) or text descriptions of the tool calls. "
                 "Simply call the tool using the API.");
@@ -341,7 +341,7 @@ int app_run(const agent_config_t *config) {
             case PROVIDER_OLLAMA: provider_name = "Ollama"; break;
         }
 
-        printf("Claude Code C (AI-agnostic coding assistant)\n");
+        printf("%s (AI-agnostic coding assistant)\n", APP_NAME);
         printf("Provider: %s | Model: %s\n", provider_name, config->model);
         printf("Type 'exit' or 'quit' to end session.\n");
         printf("Shortcuts: '/settings' or '/provider' (setup), '/model' (change model), '/key' (change key), '/info' (current config).\n\n");
@@ -349,7 +349,7 @@ int app_run(const agent_config_t *config) {
 
         char input[8192];
         while (1) {
-            printf("claude-code > ");
+            printf("%s > ", APP_NAME);
             fflush(stdout);
 
             if (!fgets(input, sizeof(input), stdin)) {

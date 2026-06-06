@@ -1,7 +1,7 @@
 This is a project I built with codecrafters (https://app.codecrafters.io/) with their Build-your-own-claude-code challenge , but there are many extensions to it now in this project . Only tested with GROQ provider , so please open an issue if you encounter any problems with other providers.
 
 Version 0.1.0
-# Claude Code C - AI-Agnostic Coding Assistant
+# Sage - AI-Agnostic Coding Assistant
 
 [![progress-banner](https://backend.codecrafters.io/progress/claude-code/377cd9e8-269e-4897-9029-2cdfe18852d6)](https://app.codecrafters.io/users/ashishk15678?r=2qF)
 [![Language](https://img.shields.io/badge/language-C23-blue.svg)](#)
@@ -10,7 +10,7 @@ Version 0.1.0
 [![Dependency-cJSON](https://img.shields.io/badge/dependency-cJSON-blueviolet.svg)](#)
 [![Providers](https://img.shields.io/badge/providers-multi--compatible-purple.svg)](#)
 
-Claude Code C is an advanced, terminal-based AI coding assistant written in C (using the C23 standard). Inspired by Anthropic's Claude Code and Agy, it features a complete multi-turn agent loop, interactive REPL, an automated tool execution system, and multi-provider compatibility.
+Sage is an advanced, terminal-based AI coding assistant written in C (using the C23 standard). Inspired by Anthropic's Claude Code and Agy, it features a complete multi-turn agent loop, interactive REPL, an automated tool execution system, and multi-provider compatibility.
 
 This project is AI provider-agnostic, meaning it can interface with OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, or local Ollama servers. It translates payloads transparently between standard OpenAI Chat Completions formats and native Anthropic Messages API formats under the hood.
 
@@ -32,7 +32,7 @@ This project is AI provider-agnostic, meaning it can interface with OpenRouter, 
 
 ## Tool Calling Suite
 
-Claude Code C implements the following tools that the AI can call dynamically to explore codebases, inspect environment metadata, or perform writes and commands:
+Sage implements the following tools that the AI can call dynamically to explore codebases, inspect environment metadata, or perform writes and commands:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
