@@ -7,7 +7,7 @@ endif()
 
 project(sage LANGUAGES C)
 
-file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS src/*.c)
+file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS core/*.c)
 
 set(CMAKE_C_STANDARD 23) # Enable the C23 standard
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -17,6 +17,6 @@ find_package(CURL REQUIRED)
 find_package(cJSON CONFIG REQUIRED)
 
 add_executable(sage ${SOURCE_FILES})
-target_include_directories(sage PRIVATE src)
+target_include_directories(sage PRIVATE include)
 target_compile_definitions(sage PRIVATE _GNU_SOURCE)
 target_link_libraries(sage PRIVATE CURL::libcurl cjson)

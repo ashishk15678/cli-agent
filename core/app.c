@@ -3,6 +3,9 @@
 #include "tool_registry.h"
 #include "utils.h"
 #include "dropdown.h"
+#include "memory.h"
+#include "drift.h"
+#include "speculate.h"
 
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
@@ -236,6 +239,19 @@ static int run_agent_loop(const agent_config_t *config, cJSON *messages) {
                 break;
             }
 
+            char *drift_explanation = NULL;
+            if (drift_check(config, &drift_explanation)) {
+                int drift_action = drift_handle_prompt(config, drift_explanation);
+                free(drift_explanation);
+                if (drift_action == 1) { // Revert
+                    status = 0;
+                    break;
+                } else if (drift_action == 2) { // Pause
+                    status = 0;
+                    break;
+                }
+            }
+
             continue;
         }
 
@@ -259,6 +275,9 @@ int app_run(const agent_config_t *config) {
         fprintf(stderr, "failed to initialize curl globally\n");
         return 1;
     }
+
+    memory_init(config);
+
 
     cJSON *messages = cJSON_CreateArray();
     if (!messages) {
@@ -329,7 +348,10 @@ int app_run(const agent_config_t *config) {
             cJSON_AddItemToArray(messages, user_msg);
         }
 
+        memory_retrieve_and_inject(config, config->prompt, messages);
+        drift_init(config->prompt);
         status = run_agent_loop(config, messages);
+        memory_auto_extract(config, messages);
     } else {
         const char *provider_name = "Unknown";
         switch (config->provider) {
@@ -344,7 +366,8 @@ int app_run(const agent_config_t *config) {
         printf("%s (AI-agnostic coding assistant)\n", APP_NAME);
         printf("Provider: %s | Model: %s\n", provider_name, config->model);
         printf("Type 'exit' or 'quit' to end session.\n");
-        printf("Shortcuts: '/settings' or '/provider' (setup), '/model' (change model), '/key' (change key), '/info' (current config).\n\n");
+        printf("Shortcuts: '/settings' or '/provider' (setup), '/model' (change model), '/key' (change key), '/info' (current config).\n");
+        printf("New Features: '/memory' (view memories), '/memory add <text>', '/speculate' (speculative execution sandbox).\n\n");
         fflush(stdout);
 
         char input[8192];
@@ -435,6 +458,60 @@ int app_run(const agent_config_t *config) {
                 continue;
             }
 
+            if (strcmp(input, "/memory") == 0 || strcmp(input, "/memories") == 0) {
+                memory_print_all();
+                continue;
+            }
+            if (strncmp(input, "/memory add ", 12) == 0) {
+                memory_add(config, input + 12, "manual", 8);
+                printf("\033[1;32m✔ Memory added successfully!\033[0m\n\n");
+                continue;
+            }
+            if (strcmp(input, "/speculate") == 0) {
+                char count_buf[32];
+                printf("Enter number of branches to run (2-3): ");
+                fflush(stdout);
+                if (fgets(count_buf, sizeof(count_buf), stdin)) {
+                    int num_branches = atoi(count_buf);
+                    if (num_branches < 2 || num_branches > 3) {
+                        printf("Invalid number of branches. Must be 2 or 3.\n\n");
+                        continue;
+                    }
+                    char test_cmd[256] = {0};
+                    printf("Enter test command (optional, e.g. 'cmake --build build'): ");
+                    fflush(stdout);
+                    if (fgets(test_cmd, sizeof(test_cmd), stdin)) {
+                        size_t cmd_len = strlen(test_cmd);
+                        if (cmd_len > 0 && test_cmd[cmd_len - 1] == '\n') {
+                            test_cmd[cmd_len - 1] = '\0';
+                        }
+                    }
+
+                    const char *prompts[3];
+                    char prompt_buffers[3][2048];
+                    int prompt_ok = 1;
+                    for (int i = 0; i < num_branches; i++) {
+                        printf("Enter Prompt for Branch %d: ", i + 1);
+                        fflush(stdout);
+                        if (fgets(prompt_buffers[i], sizeof(prompt_buffers[i]), stdin)) {
+                            size_t p_len = strlen(prompt_buffers[i]);
+                            if (p_len > 0 && prompt_buffers[i][p_len - 1] == '\n') {
+                                prompt_buffers[i][p_len - 1] = '\0';
+                            }
+                            prompts[i] = prompt_buffers[i];
+                        } else {
+                            prompt_ok = 0;
+                            break;
+                        }
+                    }
+
+                    if (prompt_ok) {
+                        speculate_run(config, num_branches, prompts, test_cmd);
+                    }
+                }
+                continue;
+            }
+
             if (len == 0) {
                 continue;
             }
@@ -446,7 +523,10 @@ int app_run(const agent_config_t *config) {
                 cJSON_AddItemToArray(messages, user_msg);
             }
 
+            memory_retrieve_and_inject(config, input, messages);
+            drift_init(input);
             status = run_agent_loop(config, messages);
+            memory_auto_extract(config, messages);
             printf("\n");
             fflush(stdout);
         }
